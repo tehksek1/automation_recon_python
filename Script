@@ -1,0 +1,186 @@
+import os
+import sys
+import subprocess
+import requests
+from urllib.parse import urlparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+# === Dependency Auto-Installer ===
+def ensure_module(module, package_name=None):
+    try:
+        __import__(module)
+    except ImportError:
+        print(f"[!] Missing Python module: {module}")
+        if os.path.exists('/usr/lib/python3.13/EXTERNALLY-MANAGED'):
+            print("[-] Cannot auto-install in Kali system environment due to PEP 668.")
+            print("[*] Use a virtual environment to run this script:\n")
+            print("    python3 -m venv reconenv && source reconenv/bin/activate")
+            print(f"    pip install {package_name or module}\n")
+            sys.exit(1)
+        else:
+            print(f"[*] Installing {package_name or module}...")
+            subprocess.check_call([sys.executable, "-m", "pip", "install", package_name or module])
+
+# === Ensure Dependencies ===
+ensure_module("Wappalyzer", "python-Wappalyzer")
+
+from Wappalyzer import Wappalyzer, WebPage
+
+# === Constants ===
+ACCEPTED_STATUS_CODES = [200, 301]
+MAX_THREADS = 30
+
+def run_command(cmd):
+    print(f"[+] Running: {cmd}")
+    result = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    return result.stdout.strip()
+
+def get_subdomains(domain, output_dir):
+    print(f"\n[1] Finding subdomains for: {domain}")
+    cmd = f"subfinder -d {domain} -silent | head -n 800"
+    subs = run_command(cmd)
+
+    if not subs:
+        print("[!] No subdomains found.")
+        return [], None
+
+    subs_file = os.path.join(output_dir, f"{domain}_subs.txt")
+    with open(subs_file, 'w') as f:
+        f.write(subs)
+
+    subdomains = subs.splitlines()
+    print(f"[✓] Found {len(subdomains)} subdomains. Saved to: {subs_file}")
+    return subdomains, subs_file
+
+def check_url(url):
+    try:
+        res = requests.head(url, timeout=3, allow_redirects=True)
+        if res.status_code in ACCEPTED_STATUS_CODES:
+            return f"{url} [Status: {res.status_code}]"
+    except:
+        pass
+    return None
+
+def extract_hostname(url):
+    try:
+        return urlparse(url).hostname
+    except:
+        return None
+
+def check_live_hosts_fast(subdomains, output_dir, domain):
+    live_file = os.path.join(output_dir, f"{domain}_live_basic.txt")
+    result_file = os.path.join(output_dir, f"{domain}_summary.txt")
+    live_hosts = []
+
+    print(f"\n[2] Checking live subdomains in parallel (200 or 301)...")
+    urls = [f"http://{sub}" for sub in subdomains] + [f"https://{sub}" for sub in subdomains]
+
+    with ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
+        futures = {executor.submit(check_url, url): url for url in urls}
+        for future in as_completed(futures):
+            result = future.result()
+            if result:
+                print(f"[✓] Live: {result}")
+                live_hosts.append(result)
+
+    with open(live_file, 'w') as f:
+        for live in live_hosts:
+            f.write(live + "\n")
+
+    with open(result_file, 'w') as rf:
+        rf.write("===== Live Host Results =====\n")
+        for host in live_hosts:
+            rf.write(host + "\n")
+
+    print(f"[✓] {len(live_hosts)} live subdomains saved to: {live_file}")
+    return live_hosts, result_file
+
+def run_nmap_scan(domain, live_hosts, result_file):
+    nmap_dir = os.path.join(os.path.expanduser("~/Desktop/AI-Recon-Results"), domain, "nmap")
+    os.makedirs(nmap_dir, exist_ok=True)
+    hosts = {extract_hostname(line.split()[0]) for line in live_hosts if line.strip()}
+
+    if not hosts:
+        print("[!] No valid hosts extracted for scanning.")
+        return
+
+    print(f"\n[✓] Starting Nmap scans on {len(hosts)} hosts...")
+
+    with open(result_file, 'a') as rf:
+        rf.write("\n\n===== Nmap Scan Results =====\n")
+
+    for host in hosts:
+        out_file = os.path.join(nmap_dir, f"{host.replace('.', '_')}.txt")
+        cmd = f"nmap -T4 -F {host} -oN {out_file}"
+        print(f"[→] Scanning {host}")
+        result = run_command(cmd)
+        with open(result_file, 'a') as rf:
+            rf.write(f"\n--- {host} ---\n{result}\n")
+
+    print(f"[✓] Nmap scanning complete. Report saved in: {result_file}")
+
+def detect_with_wappalyzer(url):
+    try:
+        webpage = WebPage.new_from_url(url, timeout=10)
+        return list(Wappalyzer.latest().analyze(webpage))
+    except:
+        return []
+
+def detect_with_whatweb(url):
+    try:
+        result = subprocess.check_output(['whatweb', '-q', url], timeout=10)
+        return result.decode('utf-8').strip() or "Unknown"
+    except:
+        return "Unknown"
+
+def clean_url(line):
+    return line.strip().split()[0]
+
+def detect_cms(domain, output_dir, result_file):
+    lives_file = os.path.join(output_dir, f"{domain}_live_basic.txt")
+    output_file = os.path.join(output_dir, f"{domain}_cms_results.txt")
+
+    if not os.path.isfile(lives_file):
+        print(f"[!] Live hosts file not found: {lives_file}")
+        return
+
+    print(f"\n[+] Starting CMS detection on live hosts from: {lives_file}\n")
+    results = []
+
+    with open(lives_file, 'r') as f:
+        urls = [clean_url(line) for line in f if line.strip()]
+
+    for url in urls:
+        print(f"[>] Scanning: {url}")
+        techs = detect_with_wappalyzer(url)
+        if techs:
+            print(f"[✓] Wappalyzer: {', '.join(techs)}")
+            results.append(f"{url} => {', '.join(techs)}")
+        else:
+            fallback = detect_with_whatweb(url)
+            print(f"[~] WhatWeb fallback: {fallback}")
+            results.append(f"{url} => {fallback}")
+
+    with open(output_file, 'w') as out, open(result_file, 'a') as rf:
+        out.write("\n".join(results) + "\n")
+        rf.write("\n\n===== CMS Detection Results =====\n")
+        rf.write("\n".join(results) + "\n")
+
+    print(f"[✓] CMS detection complete. Results saved to: {output_file}")
+
+def main():
+    domain = input("Enter the target domain (e.g. example.com): ").strip().lower()
+    output_dir = os.path.expanduser("~/Desktop/AI-Recon-Results")
+    os.makedirs(output_dir, exist_ok=True)
+
+    subdomains, _ = get_subdomains(domain, output_dir)
+    if subdomains:
+        live_hosts, result_file = check_live_hosts_fast(subdomains, output_dir, domain)
+        if live_hosts:
+            run_nmap_scan(domain, live_hosts, result_file)
+            detect_cms(domain, output_dir, result_file)
+    else:
+        print("[!] No subdomains found. Skipping rest.")
+
+if __name__ == "__main__":
+    main()  
