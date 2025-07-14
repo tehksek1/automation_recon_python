@@ -1,0 +1,24 @@
+Option 1: Manual Setup
+bash
+Copy
+Edit
+python3 -m venv reconenv
+source reconenv/bin/activate
+pip install -r requirements.txt
+python3 main.py
+Option 2: One-Click
+bash
+Copy
+Edit
+chmod +x setup.sh
+./setup.sh
+📁 Output Files
+example.com_subs.txt – Subdomains
+
+example.com_live_basic.txt – Live Hosts
+
+example.com_summary.txt – Full Report
+
+example.com_cms_results.txt – CMS Detection
+
+nmap/ – Port Scan Results
