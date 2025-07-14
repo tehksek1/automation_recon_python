@@ -1,0 +1,7 @@
+ai-recon-tool/
+├── main.py                 # Your full recon script
+├── requirements.txt        # Python dependencies
+├── setup.sh                # One-click setup script
+├── LICENSE                 # MIT open-source license
+├── .gitignore              # Ignore unnecessary files
+└── README.md               # Project documentation
