@@ -44,6 +44,14 @@ Edit
 
 ### ✅ Python 3.x (recommended 3.8+)
 
+
+
+
+
+https://github.com/user-attachments/assets/bf2e6ce0-0eac-4272-b975-db4192e205f3
+
+
+
 ### 📚 Python Modules
 
 Installed automatically (or use `pip install -r requirements.txt`):
